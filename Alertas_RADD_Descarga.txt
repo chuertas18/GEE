@@ -1,0 +1,106 @@
+// Accediendo a las alertas de perturbación forestal RADD (Reiche et al.,2021)
+// Sitio web: http://radd-alert.wur.nl
+// Citación: Reiche et al. (2021): Alertas de perturbación forestal para la Cuenca del Congo usando Sentinel-1, ERL.
+// Licencia: CC-BY-4.0
+// Modificado por Claudia Huertas
+
+// El área de interés ROI se esta definiendo con el rectángulo directamente en GEE
+
+// Accediendo a la colección de imágenes RADD
+var radd = ee.ImageCollection('projects/radar-wur/raddalert/v1');
+var geography = 'sa'; // 'ca' (centroamérica), 'sa' (sudamérica), 'africa' (áfrica), 'asia' (asia & pacífico)
+
+print('Colección de imágenes RADD:', radd);
+
+// Alerta RADD
+var radd_alert = ee.Image(radd.filterMetadata('layer','contains','alert')
+                            .filterMetadata('geography','equals',geography)
+                            .sort('system:time_end', false).first().clip(roi));
+
+print('Alerta RADD '+ geography + ':', radd_alert);
+
+// Alerta RADD: 2 = alerta no confirmada (baja confianza); 3 = alerta confirmada (alta confianza)
+Map.addLayer(radd_alert.select('Alert'), {min:2,max:3,palette:['blue','coral']}, 'Alerta RADD');
+
+// Filtrar para obtener solo alertas con valor 3 (alta confianza)
+var radd_alert_confirmed = radd_alert.select('Alert').eq(3);
+
+// Alerta RADD: 3 = alerta confirmada (alta confianza)
+Map.addLayer(radd_alert_confirmed, {}, 'Alerta RADD confirmada');
+
+// Etiquetar conjuntos de píxeles contiguos
+var contiguousPixelCount = radd_alert_confirmed.connectedPixelCount();
+
+// Máscara para conservar solo áreas que tengan más de 1000 píxeles (10 hectáreas)
+// Nota: Si los datos de Sentinel-1 tienen una resolución de 10x10 m^2, entonces 10 hectáreas son 1000 píxeles.
+var largeAreasMask = contiguousPixelCount.gte(100).and(radd_alert_confirmed);
+
+// Usar esta máscara en radd_alert_confirmed 
+var largeConfirmedAlerts = radd_alert_confirmed.updateMask(largeAreasMask);
+
+// Añadir capa al mapa
+Map.addLayer(largeConfirmedAlerts, {palette: ['coral']}, 'Alerta RADD confirmada > 10 ha');
+
+// // Vectorizar la capa largeConfirmedAlerts
+// Define los parámetros para la vectorización
+var vectorizationParams = {
+  geometry: roi,  // Esta es la región de interés que ya definiste anteriormente
+  scale: 10,  // Asume una escala de 10m, pero ajústala según tus necesidades
+  maxPixels: 1e13,  // Ajusta este valor según sea necesario para evitar errores de "too many pixels"
+  geometryType: 'polygon',
+  eightConnected: false, // Establece como "true" si deseas una conectividad de 8 píxeles
+  bestEffort: true
+};
+
+// Vectorizar la capa largeConfirmedAlerts
+var vectorData = largeConfirmedAlerts.reduceToVectors(vectorizationParams);
+
+// Añade la capa vectorizada al mapa
+Map.addLayer(vectorData, {color: 'green'}, 'Alertas vectorizadas > 10 ha');
+
+
+// Exportar a Google Drive
+// Exportar radd_alert a Google Drive, todos los valores de alerta
+Export.image.toDrive({
+  image: radd_alert, // Especificar la imagen a exportar
+  description: 'radd_alerta', // Este será el nombre del archivo en Drive
+  folder: 'GEE_Folder', // Nombre de la carpeta en Google Drive
+  region: roi, // Definir la región de interés para exportar
+  scale: 10, // Especificar la escala en metros por pixel
+  maxPixels: 1e13, // Establecer el número máximo de píxeles a exportar
+  crs: "EPSG:4326" // Definir el sistema de referencia de coordenadas para la exportación
+});
+
+// Exportar la capa de alerta_confirmada, los valores 3 (alta confianza) a Google Drive
+Export.image.toDrive({
+  image: radd_alert_confirmed, // Especificar la imagen a exportar
+  description: 'radd_alerta_confirmada',
+  folder: 'GEE_Folder', // Nombre de la carpeta en Google Drive
+  region: roi, // Definir la región de interés para exportar
+  scale: 10, // Especificar la escala en metros por pixel
+  maxPixels: 1e13, // Establecer el número máximo de píxeles a exportar
+  crs: "EPSG:4326" // Definir el sistema de referencia de coordenadas para la exportación
+});
+
+// Exportar largeAreasMask a Google Drive
+Export.image.toDrive({
+  image: largeAreasMask, // Especificar la imagen a exportar
+  description: 'radd_alerta_confirmada_sup10ha',
+  folder: 'GEE_Folder', // Nombre de la carpeta en Google Drive
+  region: roi, // Definir la región de interés para exportar
+  scale: 10, // Especificar la escala en metros por pixel
+  maxPixels: 1e13, // Establecer el número máximo de píxeles a exportar
+  crs: "EPSG:4326" // Definir el sistema de referencia de coordenadas para la exportación
+});
+
+
+// Parámetros de exportación para datos vectorizados
+var vectorExportParams = {
+  collection: vectorData, // Colección de vectores a exportar
+  description: 'radd_alerta_confirmada_sup10ha_vector', // Este será el nombre del archivo en Drive
+  folder: 'GEE_Folder', // Nombre de la carpeta en Google Drive
+  fileFormat: 'SHP' // El formato puede ser 'CSV', 'GeoJSON', 'KML', 'KMZ', 'SHP' (depende de tus necesidades)
+};
+
+// Exportar vectorData a Google Drive
+Export.table.toDrive(vectorExportParams);
